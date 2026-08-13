@@ -1,0 +1,8 @@
+{
+  "name": "sangdev-zalo-bot",
+  "version": "1.0.0",
+  "main": "cron.js",
+  "scripts": {
+    "start": "node cron.js"
+  }
+}
