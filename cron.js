@@ -1,27 +1,21 @@
 const express = require('express');
 const axios = require('axios');
-const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const URLS_FILE = path.join(__dirname, 'urls.json');
 
-// Biến lưu trữ kết quả lần chạy gần nhất để hiển thị ra UI
-let lastReport = {
-  lastRun: 'Chưa có dữ liệu',
-  total: 0,
-  successCount: 0,
-  results: []
-};
+// Đường dẫn file urls.json chuẩn hoá cho môi trường Vercel / Local
+const URLS_FILE = path.join(process.cwd(), 'urls.json');
 
-// Hàm đọc URLs từ json
+// Hàm đọc URLs an toàn từ urls.json
 function getTargetUrls() {
   try {
     if (fs.existsSync(URLS_FILE)) {
       const data = fs.readFileSync(URLS_FILE, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      return Array.isArray(parsed) ? parsed : [];
     }
   } catch (err) {
     console.error('Lỗi đọc urls.json:', err.message);
@@ -29,14 +23,18 @@ function getTargetUrls() {
   return [];
 }
 
-// Hàm thực hiện gửi request ping
+// Hàm thực hiện gửi request ping đồng thời
 async function executePing() {
   const urls = getTargetUrls();
   const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 
   if (urls.length === 0) {
-    lastReport = { lastRun: timestamp, total: 0, successCount: 0, results: [] };
-    return lastReport;
+    return {
+      lastRun: timestamp,
+      total: 0,
+      successCount: 0,
+      results: []
+    };
   }
 
   const results = await Promise.allSettled(
@@ -44,8 +42,8 @@ async function executePing() {
       const start = Date.now();
       try {
         const res = await axios.get(url, {
-          timeout: 8000,
-          headers: { 'User-Agent': 'Cron-KeepAlive/1.0' }
+          timeout: 10000,
+          headers: { 'User-Agent': 'CronMonitor/1.0' }
         });
         return {
           url,
@@ -57,7 +55,7 @@ async function executePing() {
       } catch (error) {
         return {
           url,
-          status: error.response ? error.response.status : 500,
+          status: error.response ? error.response.status : (error.code || 500),
           success: false,
           duration: `${Date.now() - start}ms`,
           message: error.message
@@ -67,30 +65,26 @@ async function executePing() {
   );
 
   const formattedResults = results.map(r => r.value || r.reason);
-  lastReport = {
+  const report = {
     lastRun: timestamp,
     total: urls.length,
     successCount: formattedResults.filter(r => r.success).length,
     results: formattedResults
   };
 
-  console.log(`[${timestamp}] Đã hoàn tất ping: ${lastReport.successCount}/${lastReport.total} URL thành công.`);
-  return lastReport;
+  console.log(`[${timestamp}] Đã ping xong: ${report.successCount}/${report.total} URL thành công.`);
+  return report;
 }
 
-// Cron job chạy mỗi 13 phút (chạy nền khi chạy local hoặc VPS)
-cron.schedule('*/13 * * * *', () => {
-  executePing();
-});
-
-// Endpoint API lấy data JSON hoặc trigger chạy
+// Endpoint API lấy data và kích hoạt ping
 app.get('/api/ping', async (req, res) => {
   const data = await executePing();
-  res.json(data);
+  res.status(200).json(data);
 });
 
 // Giao diện Web hiển thị trạng thái
 app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`
     <!DOCTYPE html>
     <html lang="vi">
@@ -99,32 +93,35 @@ app.get('/', (req, res) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>URL Monitor - Trạng thái Ping</title>
       <style>
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #f8fafc; color: #1e293b; padding: 24px 16px; margin: 0; }
-        .box { max-width: 800px; margin: auto; background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
-        h2 { margin: 0; font-size: 1.25rem; }
-        .btn { background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; }
-        .btn:hover { background: #1d4ed8; }
-        .btn:disabled { background: #94a3b8; cursor: not-allowed; }
-        .status-bar { margin: 16px 0; font-size: 0.9rem; color: #64748b; }
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+        body { background-color: #0f172a; color: #f8fafc; padding: 24px 16px; margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; }
+        .box { width: 100%; max-width: 800px; background: #1e293b; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); border: 1px solid #334155; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 16px; }
+        h2 { margin: 0; font-size: 1.25rem; font-weight: 600; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+        .btn { background: #0284c7; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: background 0.2s; }
+        .btn:hover { background: #0369a1; }
+        .btn:disabled { background: #475569; cursor: not-allowed; }
+        .status-bar { margin: 16px 0; font-size: 0.9rem; color: #94a3b8; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #f1f5f9; font-size: 0.9rem; }
-        th { background: #f8fafc; color: #475569; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
-        .badge-ok { background: #dcfce7; color: #15803d; }
-        .badge-fail { background: #fee2e2; color: #b91c1c; }
-        .url { word-break: break-all; max-width: 350px; }
+        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid #334155; font-size: 0.9rem; }
+        th { background: #0f172a; color: #94a3b8; font-weight: 600; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+        .badge-ok { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .badge-fail { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .url { word-break: break-all; max-width: 320px; color: #cbd5e1; }
+        .code { font-weight: 600; }
+        .code-200 { color: #4ade80; }
+        .code-err { color: #f87171; }
       </style>
     </head>
     <body>
       <div class="box">
         <div class="header">
-          <h2>📡 Trạng thái Ping Cron (13 phút)</h2>
+          <h2>⚡ URL Ping Monitor</h2>
           <button class="btn" id="runBtn" onclick="runPing()">Gửi Ping Ngay</button>
         </div>
         
-        <div class="status-bar" id="infoText">Đang lấy dữ liệu...</div>
+        <div class="status-bar" id="infoText">Đang tải trạng thái...</div>
 
         <table>
           <thead>
@@ -132,11 +129,11 @@ app.get('/', (req, res) => {
               <th>URL</th>
               <th>Trạng thái</th>
               <th>Mã HTTP</th>
-              <th>Thời gian phản hồi</th>
+              <th>Phản hồi</th>
             </tr>
           </thead>
           <tbody id="rows">
-            <tr><td colspan="4" style="text-align: center; color: #94a3b8;">Đang tải...</td></tr>
+            <tr><td colspan="4" style="text-align: center; color: #64748b; padding: 20px;">Đang lấy dữ liệu...</td></tr>
           </tbody>
         </table>
       </div>
@@ -154,18 +151,23 @@ app.get('/', (req, res) => {
             const res = await fetch('/api/ping');
             const data = await res.json();
 
-            info.innerHTML = 'Lần chạy gần nhất: <b>' + data.lastRun + '</b> | Thành công: <b>' + data.successCount + '/' + data.total + '</b>';
+            info.innerHTML = 'Lần chạy: <b style="color:#f8fafc">' + data.lastRun + '</b> | Thành công: <b style="color:#38bdf8">' + data.successCount + '/' + data.total + '</b>';
             
+            if (data.results.length === 0) {
+              rows.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #94a3b8;">Không tìm thấy URL nào trong urls.json</td></tr>';
+              return;
+            }
+
             rows.innerHTML = data.results.map(item => \`
               <tr>
                 <td class="url">\${item.url}</td>
                 <td><span class="badge \${item.success ? 'badge-ok' : 'badge-fail'}">\${item.success ? 'Thành công' : 'Thất bại'}</span></td>
-                <td><b>\${item.status}</b></td>
-                <td>\${item.duration} (\${item.message})</td>
+                <td class="code \${item.success ? 'code-200' : 'code-err'}">\${item.status}</td>
+                <td>\${item.duration}</td>
               </tr>
             \`).join('');
           } catch (e) {
-            info.innerText = 'Lỗi tải dữ liệu: ' + e.message;
+            info.innerText = '❌ Lỗi kết nối: ' + e.message;
           } finally {
             btn.disabled = false;
           }
@@ -177,13 +179,13 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Chạy server khi ở local / VPS
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+// Chạy server khi chạy ở môi trường Local/VPS
+if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`🚀 Server chạy tại: http://localhost:${PORT}`);
+    console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`);
     executePing();
   });
 }
 
-// Export app để tương thích Serverless trên Vercel
+// Xuất app để chạy tương thích Serverless Function trên Vercel
 module.exports = app;
